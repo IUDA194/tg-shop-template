@@ -1,3 +1,6 @@
 venv
 __pycache__/
 mydatabase.db
+config.py
+media
+.DS_Store
