@@ -1,19 +1,16 @@
 import aiosqlite as sql
 
-async def connect_to_db():
-    db = await sql.connect('mydatabase.db')
-    cur = await db.cursor()
-    await cur.execute("""CREATE TABLE if not exists users (
-                chatid TEXT
-                )""")
-    await db.commit()
-
-
 
 class database:
     def __init__(self) -> None:
         self.db = None
         self.cur = None
+        self.products_rows = {
+            "Имя" : "name",
+            "Цена" : "price",
+            "Фото" : "photo_path",
+            "Описание" : "description"
+        }
 
     async def connect_to_db(self):
         self.db = await sql.connect('mydatabase.db')
@@ -96,4 +93,30 @@ class database:
                           "description" : result[0][3]}
                 return {"status" : True, "result" : result}
             else: return {"status" : False, "error" : "Товара с тиким именем не существует, напишите /start для получения актуального списка"}
+        else: return {"status" : False, "error" : "Произошла ошибка попробуйте позже"}
+
+    async def edit_product(self, edit : str = None, old_value : str = None, new_value : str = None):
+        if edit and new_value and old_value:
+            await self.cur.execute(""" SELECT * FROM products WHERE name = ? """, (old_value,))
+            exist = await self.cur.fetchall()
+            print(exist)
+            if len(exist) >= 1:
+                try: await self.cur.execute(f""" UPDATE products SET {edit} = ? WHERE name = ? """, (new_value, old_value))
+                except : return {"status" : False, "error" : "Произошла ошибка попробуйте позже"}
+                await self.db.commit()
+                return {"status" : True}
+            else: return {"status" : False, "error" : "Продукта с таким именем не существует"}
+        else: return {"status" : False, "error" : "Произошла ошибка попробуйте позже"}
+
+    async def dalete_product(self, name : str = None):
+        if name:
+            await self.cur.execute(""" SELECT * FROM products WHERE name = ? """, (name,))
+            exist = await self.cur.fetchall()
+            print(exist)
+            if len(exist) >= 1:
+                try: await self.cur.execute(f""" DELETE FROM products WHERE name = ? """, (name,))
+                except : return {"status" : False, "error" : "Произошла ошибка попробуйте позже"}
+                await self.db.commit()
+                return {"status" : True}
+            else: return {"status" : False, "error" : "Продукта с таким именем не существует"}
         else: return {"status" : False, "error" : "Произошла ошибка попробуйте позже"}

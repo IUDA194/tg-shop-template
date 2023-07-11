@@ -11,7 +11,7 @@ from aiogram.types.input_file import InputFile
 from aiogram.types.message import ContentType
 
 from config import TOKEN, ADMINS_ID, PAYMENTS_PROVIDER_TOKEN
-from db import database, connect_to_db
+from db import database
 from texts import texts
 
 #Модель бота и клас диспетчер
@@ -21,13 +21,17 @@ db = database()
 texts = texts("usd")
 
 #Клавиатуры
-admin_kb = InlineKeyboardMarkup().add(
+admin_kb = InlineKeyboardMarkup(row_width=1).add(
     InlineKeyboardButton("Добавить товар", callback_data="add_product"),
+    InlineKeyboardButton("Изменить товар", callback_data="edit_product"),
+    InlineKeyboardButton("Удалить товар", callback_data="delete_product"),
     InlineKeyboardButton("Меню", callback_data="to_main"))
 
 back_kb = ReplyKeyboardMarkup(resize_keyboard=True).add(
     KeyboardButton("Назад")
 )
+
+admin_back_kb = InlineKeyboardMarkup().add(InlineKeyboardButton("Назад", callback_data=f"admin"))
 
 menu_kb = InlineKeyboardMarkup().add(
     InlineKeyboardButton("Меню", callback_data="menu")
@@ -46,6 +50,13 @@ class add_product(StatesGroup):
     photo = State()
     description = State()
 
+class edit_product(StatesGroup):
+    old_value = State()
+    edit = State()
+    new_value = State()
+
+class delete_product(StatesGroup):
+    name = State()
 
 ###################
 ##Клиентская часть##
@@ -173,6 +184,13 @@ async def start_command(message : types.Message):
             await message.delete()
             break
 
+@dp.callback_query_handler(text="admin", state="*")
+async def callback_query_result(callback_query: types.CallbackQuery, state: FSMContext):
+    await state.finish()
+    for id in ADMINS_ID:
+        if str(callback_query.from_user.id) == id:
+            await bot.send_message(callback_query.from_user.id, "Привет админ!", reply_markup=admin_kb)
+            break
 @dp.callback_query_handler(text="add_product")
 async def callback_query_result(callback_query: types.CallbackQuery):
     await bot.send_message(callback_query.from_user.id, "Введите название продукта(До 40-ка символов): ", reply_markup=back_kb)
@@ -259,6 +277,102 @@ async def start_command(message : types.Message, state: FSMContext):
     else:
         await state.finish()
         await message.reply("Действие отменено", reply_markup=menu_kb)
+
+@dp.callback_query_handler(text="edit_product")
+async def callback_query_result(callback_query: types.CallbackQuery):
+    products_list = await db.select_all_products()
+    if products_list['status']:
+        product_kb = InlineKeyboardMarkup()
+        for i in products_list['result']:
+            product_kb.add(InlineKeyboardButton(i[0], callback_data=f"{i[0]}"))
+        product_kb.add(InlineKeyboardButton("Назад", callback_data=f"admin"))
+
+        await bot.send_message(callback_query.from_user.id, "Выберете продукт для редактирования:", reply_markup=product_kb)
+        await edit_product.old_value.set()
+    else: await bot.send_message(callback_query.from_user.id, products_list['error'])
+
+@dp.message_handler(state=edit_product.old_value, content_types=ContentType.ANY)
+async def start_command(message : types.Message, state: FSMContext):
+    await message.delete()
+    await bot.send_message(message.from_user.id, "<b>Пожалуйста нажмите на кнопки выше!</b>")
+
+@dp.callback_query_handler(state=edit_product.old_value)
+async def callback_query_result(callback_query: types.CallbackQuery, state: FSMContext):
+    if db.products_rows:
+        async with state.proxy() as data:
+            data['old_value'] = callback_query.data
+        do_kb = InlineKeyboardMarkup()
+        for row in db.products_rows:
+            do_kb.add(InlineKeyboardButton(row, callback_data=db.products_rows[row]))
+        do_kb.add(InlineKeyboardButton("Назад", callback_data=f"admin"))
+        await bot.send_message(callback_query.from_user.id, "Выберете поле для редактирования: ", reply_markup=do_kb)
+        await edit_product.edit.set()
+    else: 
+        await bot.send_message(callback_query.from_user.id, "Произошла ошибка попробуйте позже")
+        await state.finish()
+
+@dp.message_handler(state=edit_product.edit, content_types=ContentType.ANY)
+async def start_command(message : types.Message, state: FSMContext):
+    await message.delete()
+    await bot.send_message(message.from_user.id, "<b>Пожалуйста нажмите на кнопки выше!</b>")
+
+@dp.callback_query_handler(state=edit_product.edit)
+async def callback_query_result(callback_query: types.CallbackQuery, state: FSMContext):
+    if callback_query.data:
+        async with state.proxy() as data:
+            data['edit'] = callback_query.data
+            await bot.send_message(callback_query.from_user.id, f"Введите новое значение поля {data['edit']}: ", reply_markup=admin_back_kb)
+        await edit_product.new_value.set()
+    else: 
+        await bot.send_message(callback_query.from_user.id, "Пожалуйста введите новое значение сообщением!")
+
+@dp.message_handler(state=edit_product.new_value, content_types=ContentType.ANY)
+async def start_command(message : types.Message, state: FSMContext):
+    if message.content_type == ContentType.TEXT:
+        async with state.proxy() as data:
+            data['new_value'] = message.text
+            result = await db.edit_product(data["edit"], data['old_value'], data['new_value'])
+            if result['status']: await bot.send_message(message.from_user.id, f"Поле {data['edit']} товара {data['old_value']} успешно заменено на {data['new_value']}", reply_markup=admin_back_kb)
+            else: await bot.send_message(message.from_user.id, result['error'])
+        await state.finish()
+    else: 
+        await bot.send_message(message.from_user.id, "Пожалуйста введите новое значение сообщением!")
+
+@dp.callback_query_handler(state=edit_product.edit)
+async def callback_query_result(callback_query: types.CallbackQuery, state: FSMContext):
+    callback_query.answer("Пожалуйста введите новое значение сообщением!", show_alert=True)
+
+@dp.callback_query_handler(text="delete_product")
+async def callback_query_result(callback_query: types.CallbackQuery):
+    products_list = await db.select_all_products()
+    if products_list['status']:
+        product_kb = InlineKeyboardMarkup()
+        for i in products_list['result']:
+            product_kb.add(InlineKeyboardButton(i[0], callback_data=f"{i[0]}"))
+        product_kb.add(InlineKeyboardButton("Назад", callback_data=f"admin"))
+
+        await bot.send_message(callback_query.from_user.id, "Выберете продукт для удаления:", reply_markup=product_kb)
+        await delete_product.name.set()
+    else: await bot.send_message(callback_query.from_user.id, products_list['error'])
+
+@dp.callback_query_handler(state=delete_product.name)
+async def callback_query_result(callback_query: types.CallbackQuery, state: FSMContext):
+    if callback_query.data:
+        result = await db.dalete_product(callback_query.data)
+        if result['status']:
+            await bot.send_message(callback_query.from_user.id, f"Продукт {callback_query.data} успешно удалён", reply_markup=admin_back_kb)
+            await state.finish()
+        else:
+            await bot.send_message(callback_query.from_user.id, result['error'])
+            await state.finish()
+    else: 
+        await bot.send_message(callback_query.from_user.id, "Произошла ошибка попробуйте позже")
+        await state.finish()
+
+@dp.message_handler(state=edit_product.edit, content_types=ContentType.ANY)
+async def start_command(message : types.Message, state: FSMContext):
+    await message.delete()
+    await bot.send_message(message.from_user.id, "<b>Пожалуйста нажмите на кнопки выше!</b>")
 
 #Функция которая запускается со стартом бота
 async def on_startup(_):
